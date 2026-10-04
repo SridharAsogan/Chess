@@ -1,10 +1,12 @@
 /**
  * War on Chess - Tactical Arena Engine
  * Features:
- * - PeerJS P2P Real-Time Multiplayer with Heartbeat & Disconnect Detection
+ * - PeerJS P2P Real-Time Multiplayer with Aggressive Host Disconnect Detection
+ * - WebRTC ICE Connection State Watcher (Immediate Drop Detection)
+ * - Mobile Lifecycle Events (pagehide, beforeunload)
  * - AI Engine (Minimax with Positional Tables & Move Ordering)
  * - Captured Pieces Tray with Material Score Advantage
- * - Clean Casual Turn-Based HUD (No Freeze Timers)
+ * - Clean Casual Turn-Based HUD
  * - Custom Modal System with Board Review Option
  */
 
@@ -124,7 +126,7 @@ document.addEventListener('DOMContentLoaded', () => {
     [0,  0,  0,  0,  0,  0,  0,  0]
   ];
 
-  // Tab Switching
+  // Tab Switch
   tabAi.addEventListener('click', () => {
     tabAi.classList.add('active');
     tabFriend.classList.remove('active');
@@ -416,7 +418,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let depth = 1;
     if (aiDifficulty === 'warrior') depth = 2;
-    if (aiDifficulty === 'grandmaster') depth = 3;
+    if (aiDifficulty === 'grandmaster' || aiDifficulty === 'warlord') depth = 3;
 
     if (aiDifficulty === 'novice') {
       const cap = moves.filter(m => m.captured);
@@ -513,7 +515,7 @@ document.addEventListener('DOMContentLoaded', () => {
     gameModal.style.display = 'none';
     stopHeartbeat();
     if (conn) {
-      conn.close();
+      try { conn.close(); } catch(e) {}
       conn = null;
     }
     screenArena.style.display = 'none';
@@ -531,14 +533,20 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (conn && conn.open) {
-        conn.send({ type: 'PING' });
-      }
-
-      // எதிராளியிடமிருந்து 6 வினாடிகளுக்கு மேல் பதில் வரவில்லை எனில் இணைப்பு துண்டிக்கப்பட்டதாக முடிவு செய்யப்படும்
-      if (Date.now() - lastOpponentPing > 6000) {
+        try {
+          conn.send({ type: 'PING' });
+        } catch (e) {
+          handleOpponentDisconnected();
+        }
+      } else if (conn && !conn.open) {
         handleOpponentDisconnected();
       }
-    }, 3000);
+
+      // 4.5 விநாடிக்கு மேல் எந்த பதிலும் இல்லை எனில் துண்டிக்கப்பட்டதாக அறிவிக்கப்படும்
+      if (Date.now() - lastOpponentPing > 4500) {
+        handleOpponentDisconnected();
+      }
+    }, 2000);
   }
 
   function stopHeartbeat() {
@@ -568,11 +576,23 @@ document.addEventListener('DOMContentLoaded', () => {
       startHeartbeat();
     });
 
+    // நேரடி WebRTC ICE Connection State கண்காணிப்பு
+    if (conn.peerConnection) {
+      conn.peerConnection.oniceconnectionstatechange = () => {
+        const state = conn.peerConnection.iceConnectionState;
+        if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+          handleOpponentDisconnected();
+        }
+      };
+    }
+
     conn.on('data', (data) => {
       // 1. Heartbeat Ping / Pong
       if (data.type === 'PING') {
         lastOpponentPing = Date.now();
-        if (conn && conn.open) conn.send({ type: 'PONG' });
+        if (conn && conn.open) {
+          try { conn.send({ type: 'PONG' }); } catch(e) {}
+        }
         return;
       }
       if (data.type === 'PONG') {
@@ -580,7 +600,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      // 2. எதிராளி தானாக வெளியேறினால்
+      // 2. எதிராளி வெளியேறினால்
       if (data.type === 'LEAVE_GAME') {
         handleOpponentDisconnected();
         return;
@@ -590,6 +610,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (data.type === 'HANDSHAKE') {
         oppName.innerText = (data.name || 'OPPONENT').toUpperCase();
         startMultiplayerArena();
+        startHeartbeat();
       } else if (data.type === 'MOVE') {
         const res = game.move(data.move);
         if (res) {
@@ -635,7 +656,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const pName = document.getElementById('playerName').value.trim() || 'Commander';
     playerNameDisplay.innerText = pName.toUpperCase();
 
-    // Host வெள்ளையாகவும், Guest கருப்பாகவும் களமிறங்குவர்
     playerSide = isHost ? 'w' : 'b';
 
     if (playerSide === 'b') {
@@ -772,13 +792,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Action Buttons (Resign / Draw / Exit)
+  // Action Buttons
   btnResign.addEventListener('click', () => {
     if (isGameOver) return;
     isGameOver = true;
     stopHeartbeat();
     if (!isAiMode && conn && conn.open) {
-      conn.send({ type: 'RESIGN' });
+      try { conn.send({ type: 'RESIGN' }); } catch(e) {}
     }
     showModal('🏳️', 'SURRENDER', 'You surrendered the battle. Enemy wins.');
   });
@@ -789,28 +809,33 @@ document.addEventListener('DOMContentLoaded', () => {
       showModal('🛡️', 'DRAW REJECTED', 'Opponent evaluated the board and refused to surrender.');
       setTimeout(() => { gameModal.style.display = 'none'; }, 1800);
     } else if (conn && conn.open) {
-      conn.send({ type: 'DRAW_OFFER' });
+      try { conn.send({ type: 'DRAW_OFFER' }); } catch(e) {}
       showModal('🤝', 'DRAW OFFERED', 'Draw offer sent to opponent commander...');
       setTimeout(() => { gameModal.style.display = 'none'; }, 1800);
     }
   });
 
+  function notifyDisconnection() {
+    if (!isAiMode && conn && conn.open) {
+      try {
+        conn.send({ type: 'LEAVE_GAME' });
+      } catch (e) {}
+    }
+  }
+
   btnExitLobby.addEventListener('click', () => {
     isGameOver = true;
     stopHeartbeat();
-    if (!isAiMode && conn && conn.open) {
-      conn.send({ type: 'LEAVE_GAME' });
-      conn.close();
+    notifyDisconnection();
+    if (conn) {
+      try { conn.close(); } catch(e) {}
       conn = null;
     }
     screenArena.style.display = 'none';
     screenLobby.style.display = 'flex';
   });
 
-  // பிரவுசர் டேப்பை மூடும்போது சிக்னல் அனுப்புதல்
-  window.addEventListener('beforeunload', () => {
-    if (!isAiMode && conn && conn.open) {
-      conn.send({ type: 'LEAVE_GAME' });
-    }
-  });
+  // மொபைல் பிரவுசர் டேப் மூடப்படும் போது அல்லது வெளியேறும் போது
+  window.addEventListener('pagehide', notifyDisconnection);
+  window.addEventListener('beforeunload', notifyDisconnection);
 });
