@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>War on Chess: Tactical Arena</title>
+  <link rel="stylesheet" href="css/index.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
+  <!-- Official Chess Rules Engine -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+  <!-- PeerJS for Free WebRTC P2P Multiplayer -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+<body>
+
+  <div class="app-container">
+    <!-- Screen 1: Lobby Screen -->
+    <div id="screenLobby" class="lobby-card">
+      <div class="lobby-header">
+        <div class="chess-icon">⚔️ ♚ ⚔️</div>
+        <h1 class="game-title">WAR ON CHESS</h1>
+        <p class="game-subtitle">TACTICAL BATTLEFIELD</p>
+      </div>
+
+      <!-- Commander Profile -->
+      <div class="input-group">
+        <label for="playerName" class="group-label">COMMANDER CALLSIGN</label>
+        <input type="text" id="playerName" class="text-input" placeholder="Enter Callsign / Name" maxlength="15" value="Commander" />
+      </div>
+
+      <!-- Mode Selector Tabs -->
+      <div class="mode-tabs">
+        <button id="tabAi" class="tab-btn active" type="button">VS COMPUTER (AI)</button>
+        <button id="tabFriend" class="tab-btn" type="button">VS FRIEND (P2P)</button>
+      </div>
+
+      <!-- Option Box 1: AI Options -->
+      <div id="aiOptions" class="setup-section active">
+        <div class="option-block">
+          <label class="group-label">DIFFICULTY LEVEL</label>
+          <div class="selector-row">
+            <label class="radio-card">
+              <input type="radio" name="difficulty" value="novice" />
+              <span class="card-box">NOVICE<br><small>Level 1</small></span>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="difficulty" value="warrior" />
+              <span class="card-box">WARRIOR<br><small>Level 2</small></span>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="difficulty" value="grandmaster" checked />
+              <span class="card-box">WARLORD<br><small>Level 3</small></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="option-block">
+          <label class="group-label">CHOOSE YOUR ARMY</label>
+          <div class="color-row">
+            <label class="color-card">
+              <input type="radio" name="armyColor" value="w" checked />
+              <span class="color-box white-army">♔ WHITE</span>
+            </label>
+            <label class="color-card">
+              <input type="radio" name="armyColor" value="random" />
+              <span class="color-box random-army">🎲 RANDOM</span>
+            </label>
+            <label class="color-card">
+              <input type="radio" name="armyColor" value="b" />
+              <span class="color-box black-army">♚ BLACK</span>
+            </label>
+          </div>
+        </div>
+
+        <button id="btnStartGame" class="btn-battle" type="button">
+          ENTER BATTLEFIELD ⚔️
+        </button>
+      </div>
+
+      <!-- Option Box 2: Friend (WebRTC P2P) Options -->
+      <div id="friendOptions" class="setup-section">
+        <div class="p2p-block">
+          <!-- Create Room (Host) -->
+          <div class="p2p-card">
+            <span class="p2p-title">CREATE WAR ROOM (WHITE)</span>
+            <p class="p2p-desc">Generate a secure room code and share it with your friend</p>
+            <button id="btnCreateRoom" class="btn-sub" type="button">GENERATE ROOM CODE</button>
+            <div id="roomCodeDisplay" class="code-box" style="display: none;">
+              <span id="createdCodeText">----</span>
+              <button id="btnCopyCode" class="btn-copy" type="button">COPY</button>
+            </div>
+            <span id="hostStatusMsg" class="p2p-status">Waiting to generate code...</span>
+          </div>
+
+          <div class="or-divider">── OR ──</div>
+
+          <!-- Join Room (Guest) -->
+          <div class="p2p-card">
+            <span class="p2p-title">JOIN BATTLE (BLACK)</span>
+            <input type="text" id="joinRoomCode" class="text-input" placeholder="Enter Opponent's Room Code" />
+            <button id="btnJoinRoom" class="btn-sub btn-accent" type="button">CONNECT TO ARENA</button>
+            <span id="joinStatusMsg" class="p2p-status">Enter code and connect</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Screen 2: Chess Arena -->
+    <div id="screenArena" class="arena-card" style="display: none;">
+      <!-- Opponent HUD -->
+      <div class="player-hud opponent-hud" id="hudOpponent">
+        <div class="hud-profile">
+          <div id="oppBadge" class="avatar-badge">♚</div>
+          <div class="player-details">
+            <span id="oppName" class="player-title">OPPONENT</span>
+            <div id="oppCaptured" class="captured-box"></div>
+          </div>
+        </div>
+        <div id="oppStatus" class="turn-status-badge">WAITING</div>
+      </div>
+
+      <!-- Center: Chessboard Container -->
+      <div class="board-wrapper">
+        <div id="chessBoard" class="chess-grid"></div>
+      </div>
+
+      <!-- Commander HUD -->
+      <div class="player-hud commander-hud" id="hudPlayer">
+        <div class="hud-profile">
+          <div id="commanderBadge" class="avatar-badge">♔</div>
+          <div class="player-details">
+            <span id="playerNameDisplay" class="player-title">COMMANDER</span>
+            <div id="playerCaptured" class="captured-box"></div>
+          </div>
+        </div>
+        <div id="playerStatus" class="turn-status-badge active-turn">YOUR TURN</div>
+      </div>
+
+      <!-- Action Footer Deck -->
+      <div class="arena-controls">
+        <button id="btnDraw" class="arena-btn" type="button">🤝 DRAW</button>
+        <button id="btnResign" class="arena-btn btn-danger" type="button">🏳️ RESIGN</button>
+        <button id="btnExitLobby" class="arena-btn" type="button">🚪 EXIT</button>
+      </div>
+    </div>
+
+    <!-- Custom In-Game Modal -->
+    <div id="gameModal" class="modal-overlay" style="display: none;">
+      <div class="modal-card">
+        <div id="modalIcon" class="modal-icon">⚔️</div>
+        <h2 id="modalTitle" class="modal-title">VICTORY</h2>
+        <p id="modalMsg" class="modal-msg">Checkmate! You conquered the battlefield.</p>
+        
+        <div class="modal-btn-group">
+          <button id="btnReviewBoard" class="arena-btn" type="button">🔍 REVIEW BOARD</button>
+          <button id="btnModalAction" class="btn-battle modal-btn" type="button">RETURN TO BASE</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Check Floating Badge -->
+    <div id="checkToast" class="check-toast" style="display: none;">⚠️ CHECK! ⚠️</div>
+  </div>
+
+  <script src="js/index.js"></script>
+</body>
+</html>
