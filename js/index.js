@@ -1,5 +1,11 @@
 /**
- * War on Chess - Full Tactical Engine with PeerJS P2P Real-Time Multiplayer
+ * War on Chess - Tactical Arena Engine
+ * Features:
+ * - PeerJS P2P Real-Time Multiplayer with Heartbeat & Disconnect Detection
+ * - AI Engine (Minimax with Positional Tables & Move Ordering)
+ * - Captured Pieces Tray with Material Score Advantage
+ * - Clean Casual Turn-Based HUD (No Freeze Timers)
+ * - Custom Modal System with Board Review Option
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -56,10 +62,12 @@ document.addEventListener('DOMContentLoaded', () => {
   let validMoves = [];
   let lastMove = null;
 
-  // WebRTC P2P States
+  // WebRTC P2P & Connection Watchdog States
   let peer = null;
   let conn = null;
   let isHost = false;
+  let heartbeatTimer = null;
+  let lastOpponentPing = Date.now();
 
   const PIECE_UNICODE = {
     w: { p: '♙', r: '♖', n: '♘', b: '♗', q: '♕', k: '♔' },
@@ -116,7 +124,7 @@ document.addEventListener('DOMContentLoaded', () => {
     [0,  0,  0,  0,  0,  0,  0,  0]
   ];
 
-  // Tab Switch
+  // Tab Switching
   tabAi.addEventListener('click', () => {
     tabAi.classList.add('active');
     tabFriend.classList.remove('active');
@@ -272,8 +280,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function handleSquareClick(square) {
     if (isGameOver || game.game_over()) return;
-
-    // Both in AI and P2P, you can only move on your turn
     if (game.turn() !== playerSide) return;
 
     const move = validMoves.find(m => m.to === square);
@@ -289,7 +295,6 @@ document.addEventListener('DOMContentLoaded', () => {
       if (moveResult) {
         lastMove = { from: moveResult.from, to: moveResult.to };
 
-        // Send move to friend in P2P mode
         if (!isAiMode && conn && conn.open) {
           conn.send({ type: 'MOVE', move: movePayload });
         }
@@ -411,7 +416,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let depth = 1;
     if (aiDifficulty === 'warrior') depth = 2;
-    if (aiDifficulty === 'grandmaster' || aiDifficulty === 'warlord') depth = 3;
+    if (aiDifficulty === 'grandmaster') depth = 3;
 
     if (aiDifficulty === 'novice') {
       const cap = moves.filter(m => m.captured);
@@ -477,6 +482,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function checkGameStatus() {
     if (game.in_checkmate()) {
       isGameOver = true;
+      stopHeartbeat();
       const winnerColor = game.turn() === 'w' ? 'b' : 'w';
       if (winnerColor === playerSide) {
         showModal('🏆', 'VICTORY!', 'Outstanding Commander! Checkmate, you conquered the war!');
@@ -485,6 +491,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } else if (game.in_draw()) {
       isGameOver = true;
+      stopHeartbeat();
       showModal('🤝', 'DRAW', 'Match concluded in an honorable draw.');
     }
   }
@@ -504,22 +511,82 @@ document.addEventListener('DOMContentLoaded', () => {
 
   btnModalAction.addEventListener('click', () => {
     gameModal.style.display = 'none';
-    screenArena.style.display = 'none';
-    screenLobby.style.display = 'flex';
+    stopHeartbeat();
     if (conn) {
       conn.close();
       conn = null;
     }
+    screenArena.style.display = 'none';
+    screenLobby.style.display = 'flex';
   });
 
-  /* ---------------- P2P WEBRTC MULTIPLAYER ---------------- */
+  /* ---------------- P2P WEBRTC MULTIPLAYER & HEARTBEAT ---------------- */
+  function startHeartbeat() {
+    stopHeartbeat();
+    lastOpponentPing = Date.now();
+    heartbeatTimer = setInterval(() => {
+      if (isGameOver) {
+        stopHeartbeat();
+        return;
+      }
+
+      if (conn && conn.open) {
+        conn.send({ type: 'PING' });
+      }
+
+      // எதிராளியிடமிருந்து 6 வினாடிகளுக்கு மேல் பதில் வரவில்லை எனில் இணைப்பு துண்டிக்கப்பட்டதாக முடிவு செய்யப்படும்
+      if (Date.now() - lastOpponentPing > 6000) {
+        handleOpponentDisconnected();
+      }
+    }, 3000);
+  }
+
+  function stopHeartbeat() {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  }
+
+  function handleOpponentDisconnected() {
+    if (isGameOver) return;
+    isGameOver = true;
+    stopHeartbeat();
+
+    playerStatusEl.innerText = "OPPONENT LEFT";
+    playerStatusEl.classList.remove('active-turn');
+    oppStatusEl.innerText = "DISCONNECTED";
+    oppStatusEl.classList.remove('active-turn');
+
+    showModal('🔌', 'OPPONENT ABANDONED', 'The enemy commander lost connection or fled the battlefield. Victory is yours!');
+  }
+
   function setupPeerConnectionListeners() {
     conn.on('open', () => {
       const myName = document.getElementById('playerName').value.trim() || 'Commander';
       conn.send({ type: 'HANDSHAKE', name: myName });
+      startHeartbeat();
     });
 
     conn.on('data', (data) => {
+      // 1. Heartbeat Ping / Pong
+      if (data.type === 'PING') {
+        lastOpponentPing = Date.now();
+        if (conn && conn.open) conn.send({ type: 'PONG' });
+        return;
+      }
+      if (data.type === 'PONG') {
+        lastOpponentPing = Date.now();
+        return;
+      }
+
+      // 2. எதிராளி தானாக வெளியேறினால்
+      if (data.type === 'LEAVE_GAME') {
+        handleOpponentDisconnected();
+        return;
+      }
+
+      // 3. ஆட்ட நிகழ்வுகள்
       if (data.type === 'HANDSHAKE') {
         oppName.innerText = (data.name || 'OPPONENT').toUpperCase();
         startMultiplayerArena();
@@ -534,10 +601,12 @@ document.addEventListener('DOMContentLoaded', () => {
         checkGameStatus();
       } else if (data.type === 'RESIGN') {
         isGameOver = true;
+        stopHeartbeat();
         showModal('🏆', 'VICTORY!', 'Enemy commander surrendered the war!');
       } else if (data.type === 'DRAW_OFFER') {
         if (confirm("Opponent is offering a draw. Do you accept?")) {
           isGameOver = true;
+          stopHeartbeat();
           conn.send({ type: 'DRAW_ACCEPT' });
           showModal('🤝', 'DRAW', 'The war ended in an agreed draw.');
         } else {
@@ -545,6 +614,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       } else if (data.type === 'DRAW_ACCEPT') {
         isGameOver = true;
+        stopHeartbeat();
         showModal('🤝', 'DRAW', 'Opponent accepted the draw offer.');
       } else if (data.type === 'DRAW_DECLINE') {
         showModal('🛡️', 'DRAW DECLINED', 'Opponent declined your draw offer.');
@@ -553,9 +623,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     conn.on('close', () => {
-      if (!isGameOver) {
-        showModal('🔌', 'DISCONNECTED', 'Opponent left the battlefield.');
-      }
+      handleOpponentDisconnected();
+    });
+
+    conn.on('error', () => {
+      handleOpponentDisconnected();
     });
   }
 
@@ -563,7 +635,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const pName = document.getElementById('playerName').value.trim() || 'Commander';
     playerNameDisplay.innerText = pName.toUpperCase();
 
-    // Host = White, Guest = Black
+    // Host வெள்ளையாகவும், Guest கருப்பாகவும் களமிறங்குவர்
     playerSide = isHost ? 'w' : 'b';
 
     if (playerSide === 'b') {
@@ -598,8 +670,7 @@ document.addEventListener('DOMContentLoaded', () => {
     hostStatusMsg.innerText = "Connecting to signaling server...";
     btnCreateRoom.disabled = true;
 
-    // Generate random 6-digit military code
-    const generatedId = 'woc-' + Math.floor(100000 + Math.random() * 900000);
+    const generatedId = Math.floor(1000 + Math.random() * 9000);
 
     if (peer) peer.destroy();
     peer = new Peer(generatedId);
@@ -705,6 +776,7 @@ document.addEventListener('DOMContentLoaded', () => {
   btnResign.addEventListener('click', () => {
     if (isGameOver) return;
     isGameOver = true;
+    stopHeartbeat();
     if (!isAiMode && conn && conn.open) {
       conn.send({ type: 'RESIGN' });
     }
@@ -725,11 +797,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   btnExitLobby.addEventListener('click', () => {
     isGameOver = true;
-    if (conn) {
+    stopHeartbeat();
+    if (!isAiMode && conn && conn.open) {
+      conn.send({ type: 'LEAVE_GAME' });
       conn.close();
       conn = null;
     }
     screenArena.style.display = 'none';
     screenLobby.style.display = 'flex';
+  });
+
+  // பிரவுசர் டேப்பை மூடும்போது சிக்னல் அனுப்புதல்
+  window.addEventListener('beforeunload', () => {
+    if (!isAiMode && conn && conn.open) {
+      conn.send({ type: 'LEAVE_GAME' });
+    }
   });
 });
